@@ -1,0 +1,66 @@
+name: lista
+
+# Arma la lista cada lunes, la controla y, si pasa, la publica en la rama "lista":
+#   https://raw.githubusercontent.com/<este proyecto>/lista/blocklist.bin   (principal)
+#   https://cdn.jsdelivr.net/gh/<este proyecto>@lista/blocklist.bin        (respaldo)
+# Si algo falla, no se publica nada y la placa sigue con la que tiene.
+on:
+  schedule:
+    - cron: "17 4 * * 1"   # lunes 04:17 UTC (01:17 en Argentina)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: lista
+  cancel-in-progress: false
+
+jobs:
+  armar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Pruebas de los controles
+        run: python -m unittest -v test_controlar_lista
+
+      - name: Armar Hagezi Pro (falla si la fuente no responde)
+        run: |
+          python build_blocklist.py blocklist.bin \
+            https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/pro-onlydomains.txt \
+            2>&1 | tee armado.txt
+
+      - name: Bajar la publicada la semana pasada (si hay)
+        run: curl -sfL -o anterior.bin "https://raw.githubusercontent.com/${{ github.repository }}/lista/blocklist.bin" || rm -f anterior.bin
+
+      - name: Controles
+        run: python controlar_lista.py blocklist.bin anterior.bin
+
+      - name: Publicar en la rama "lista"
+        run: |
+          n=$(( $(stat -c%s blocklist.bin) / 5 ))
+          mkdir pub && cp blocklist.bin pub/
+          printf 'fecha=%s\ndirecciones=%s\nsha256=%s\nfuente=Hagezi Pro (wildcard/pro-onlydomains)\n' \
+            "$(date -u +%F)" "$n" "$(sha256sum blocklist.bin | cut -d' ' -f1)" > pub/lista.txt
+          cd pub
+          git init -q -b lista
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add blocklist.bin lista.txt
+          git commit -q -m "Lista del $(date -u +%F): $n direcciones"
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" lista
+
+      - name: Avisarle a jsDelivr que refresque su copia
+        run: |
+          curl -sf "https://purge.jsdelivr.net/gh/${{ github.repository }}@lista/blocklist.bin" || echo "jsDelivr no respondió; se refresca solo en unas horas"
+          curl -sf "https://purge.jsdelivr.net/gh/${{ github.repository }}@lista/lista.txt" || true
+
+      - name: Que GitHub no la apague por falta de movimiento
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/lista.yml/enable" || echo "no se pudo volver a prender (sigue prendida igual)"
