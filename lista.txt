@@ -1,0 +1,4 @@
+fecha=2026-11-16
+direcciones=241180
+sha256=702977a20927d77c0adcb8387c91dd5def2195b26dc8adab2fd933f6b3363437
+fuente=Hagezi Pro (wildcard/pro-onlydomains)
